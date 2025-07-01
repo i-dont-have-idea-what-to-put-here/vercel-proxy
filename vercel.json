@@ -1,6 +1,5 @@
 {
   "version": 2,
-  "public": false,
   "builds": [
     {
       "src": "index.js",
@@ -12,6 +11,5 @@
       "src": "/(.*)",
       "dest": "index.js"
     }
-  ],
-  "buildCommand": "npm run build"
+  ]
 }
