@@ -1,131 +1,91 @@
-"use strict";
-var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
-    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
-    return new (P || (P = Promise))(function (resolve, reject) {
-        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
-        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
-        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
-        step((generator = generator.apply(thisArg, _arguments || [])).next());
-    });
-};
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-var _a, _b, _c, _d;
-Object.defineProperty(exports, "__esModule", { value: true });
-const express_1 = __importDefault(require("express"));
-const http_proxy_middleware_1 = require("http-proxy-middleware");
-const fs_1 = require("fs");
-const cors_1 = __importDefault(require("cors"));
-const marked_1 = require("marked");
-const morgan_1 = __importDefault(require("morgan"));
-const app = (0, express_1.default)();
-const port = (_a = process.env.PORT) !== null && _a !== void 0 ? _a : 3003;
-var corsWhiteList = (_d = (_c = (_b = process.env) === null || _b === void 0 ? void 0 : _b.CORS) === null || _c === void 0 ? void 0 : _c.split(",")) !== null && _d !== void 0 ? _d : [];
-let readmeHTML = null;
-const getReadmeHTML = () => __awaiter(void 0, void 0, void 0, function* () {
+const express = require('express');
+const { createProxyMiddleware } = require('http-proxy-middleware');
+const fetch = require('node-fetch');
+const cors = require('cors');
+const helmet = require('helmet');
+
+const app = express();
+
+// Security middleware
+app.use(helmet());
+app.use(cors());
+
+// Environment variables
+const PORT = process.env.PORT || 3000;
+const USER_AGENT = process.env.USER_AGENT || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36';
+
+// Custom proxy handler that preserves all HTTP methods and headers
+app.use('/proxy', async (req, res) => {
+  try {
+    const targetUrl = req.query.url;
+    
+    if (!targetUrl) {
+      return res.status(400).json({ error: 'Target URL is required as a query parameter (url)' });
+    }
+
+    // Validate URL
+    let parsedUrl;
     try {
-        if (readmeHTML !== null)
-            return readmeHTML;
-        readmeHTML = (0, marked_1.marked)(yield (0, fs_1.readFileSync)("./README.md", "utf-8"));
-        return readmeHTML;
+      parsedUrl = new URL(targetUrl);
+    } catch (err) {
+      return res.status(400).json({ error: 'Invalid URL provided' });
     }
-    catch (error) {
-        return "Hello Vercel-Proxy🚀🚀🚀";
+
+    // Prepare headers
+    const headers = { ...req.headers };
+    headers['host'] = parsedUrl.host;
+    headers['origin'] = parsedUrl.origin;
+    headers['referer'] = `${parsedUrl.origin}/`;
+    headers['user-agent'] = USER_AGENT;
+    
+    // Remove Vercel-specific headers that might cause issues
+    delete headers['x-vercel-id'];
+    delete headers['x-vercel-ip-country'];
+    delete headers['x-vercel-deployment-url'];
+    delete headers['x-now-id'];
+    delete headers['x-now-trace'];
+
+    // Prepare fetch options
+    const options = {
+      method: req.method,
+      headers: headers,
+      redirect: 'follow'
+    };
+
+    // Include body for methods that have one
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
+      options.body = req.body;
     }
-});
-app.use((0, cors_1.default)({
-    origin: (origin = "", callback) => {
-        if (corsWhiteList.length === 0) {
-            callback(null, true);
-        }
-        else if (corsWhiteList.includes(origin)) {
-            callback(null, true);
-        }
-        else {
-            callback(new Error("Origin Not allowed by CORS"));
-        }
-    },
-}));
-// target source: 1. headers.proxy 2. urlQuery.proxy
-const getTarget = (req, onError = () => {
-    throw new Error("No proxy target provided");
-}) => {
-    var _a, _b, _c, _d;
-    const target = (_d = (_b = (_a = req === null || req === void 0 ? void 0 : req.headers) === null || _a === void 0 ? void 0 : _a.proxy) !== null && _b !== void 0 ? _b : (_c = req === null || req === void 0 ? void 0 : req.query) === null || _c === void 0 ? void 0 : _c.proxy) !== null && _d !== void 0 ? _d : "";
-    if (!target)
-        onError === null || onError === void 0 ? void 0 : onError();
-    return `${target}`;
-};
-app.use((0, morgan_1.default)(function (tokens, req, res) {
-    return [
-        `[Log]:`,
-        req.headers["origin"],
-        getTarget(req, null),
-        tokens.method(req, res),
-        tokens.url(req, res),
-        tokens.status(req, res),
-        tokens["response-time"](req, res) + "ms", // response time
-    ]
-        .map((v) => v || "NULL")
-        .join(" ");
-}));
-app.use((req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
-    if (req.method === "GET" && !getTarget(req, null)) {
-        res
-            .status(200)
-            .send(req.originalUrl === "/" ? yield getReadmeHTML() : "OK");
-    }
-    else {
-        next();
-    }
-}));
-const BLOCK_HEADER_KEYS = [
-    // "host",
-    "proxy",
-    "referer",
-    "origin",
-    "user-agent",
-    /^sec-/,
-];
-const removeHeaders = (proxyReq) => {
-    Object.keys(proxyReq.getHeaders() || {}).forEach((key) => {
-        if (BLOCK_HEADER_KEYS.find((rule) => typeof rule === "string" ? rule === key : rule.test(key)) !== undefined) {
-            proxyReq.removeHeader(key);
-        }
+
+    const response = await fetch(targetUrl, options);
+
+    // Forward status code
+    res.status(response.status);
+
+    // Forward headers
+    response.headers.forEach((value, name) => {
+      // Skip some headers that shouldn't be forwarded
+      if (!['content-encoding', 'transfer-encoding', 'connection'].includes(name.toLowerCase())) {
+        res.setHeader(name, value);
+      }
     });
-};
-const errorHandler = (err, req, res, next = () => { }) => {
-    console.error("[Error]: ", err.message);
-    res.status(400).send(`Error: ${err.message}`);
-};
-const RES_REMOVE_HEADERS = [
-    "x-frame-options",
-    "content-security-policy",
-];
-const proxyMiddleware = (0, http_proxy_middleware_1.createProxyMiddleware)({
-    changeOrigin: true,
-    router: (req) => __awaiter(void 0, void 0, void 0, function* () { return getTarget(req); }),
-    onProxyReq: (proxyReq, req, res) => {
-        removeHeaders(proxyReq);
-        // 无需手动设置 host， http-proxy-middleware 会自动设置为 target 的 host
-        // proxyReq.setHeader("host", getTarget(req).replace(/^https?:\/\//, ""));
-        // console.log(proxyReq.getHeaders());
-    },
-    onProxyRes: (proxyRes, req, res) => {
-        RES_REMOVE_HEADERS.forEach((key) => {
-            delete proxyRes.headers[key];
-        });
-    },
-    proxyTimeout: 900 * 10,
-    onError: (err, req, res, target = "") => {
-        const targetUrl = typeof target === "object" ? target === null || target === void 0 ? void 0 : target.href : target;
-        errorHandler(new Error(`Proxy fail: ${err.message} -> ${targetUrl}`), req, res);
-    },
+
+    // Stream the response back to the client
+    response.body.pipe(res);
+  } catch (error) {
+    console.error('Proxy error:', error);
+    res.status(500).json({ error: 'Proxy error', details: error.message });
+  }
 });
-app.use(proxyMiddleware);
-app.use(errorHandler);
-app.listen(port, () => {
-    console.log(`[Server]: Proxy Server is running at http://localhost:${port}`);
+
+// Simple health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).send('OK');
 });
+
+// Start server
+app.listen(PORT, () => {
+  console.log(`Proxy server running on port ${PORT}`);
+});
+
 module.exports = app;
